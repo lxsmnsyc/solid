@@ -1,5 +1,141 @@
 # @solidjs/signals
 
+## 2.0.0-rc.8
+
+### Patch Changes
+
+- 21c5460: Router-agnostic navigation attribution: `OBSERVE.attribution.withOrigin({ kind: "navigation", name, to, from, params }, fn)`
+
+  A navigation in Solid 2 is a plain write to the location; the runtime already sees everything it costs (the hold behind route data, the re-runs, the silence) but not that the writes were a navigation, or to which route. `withOrigin` is the seam where a router says so, around its write — the one router-specific line, living in the router. From it the attribution engine:
+  - stamps the writes with a `navigation` origin (new `ChangeOrigin.kind`, with `name`/`to`/`from`/`params`), nested under the enclosing interaction — including through an action step — so cause chains read `— navigation to /users/:id (under click on a.nav "Alice")`;
+  - names holds by route: `HoldEvent.origin`, `SILENT_HOLD`/`LONG_HOLD` messages that start from the navigation, and `data.navigation` on the event;
+  - keeps one `NavigationEvent` per frame (`attribution.navigations()`), settled exactly once as `committed` (a plain drain took the writes), `held` (with the `HoldEvent` attached), or `superseded` (a later write replaced them before they landed);
+  - folds settled navigations per route into `feedback().navigations`.
+
+  The ref is read late on purpose. `name`/`to`/`params` are re-read from the object when the navigation settles, so a router whose match is coarse at write time (a lazy route subtree resolving inside the hold) assigns the exact pattern onto the same object and every consumer reads it — no second API. A redirect is declared with `redirect: n` (the hop depth routers already track) and folds onto the pending navigation instead of opening one: one record, timed from the user's request, the abandoned destination kept in `NavigationEvent.redirects`, `feedback().navigations[].redirected` counting them, and `formatOrigin` reading `navigation to /login (redirected from /users/42)`.
+
+  Hold census fix: a `latest()`/`isPending()` companion now counts as acknowledgement only when an effect reads it, through however many memos. Memos compute eagerly, so a router's internal `createMemo(() => isPending(location))` used to clear `SILENT_HOLD` for every navigation whether or not anything rendered it.
+
+  One new core hook, `flushEnd`, fires once per `flush()` drain so the engine has the "committed and effects ran" instant for writes no transition held. Prod builds are unchanged (the hook site folds out; only the inert attribution twin gained the new empty queries).
+
+- 711b557: Move the #3338 diagnostics out of prod bytes. The `lazy()` "not preloaded" explanation and the document-root preload-failure framing are dev-only; prod keeps terse messages and, at a document root, hands the preload failure itself to `reportError` (no wrapper `Error`). The `haltReactivity` `reportError` hand-off is compacted.
+- 1354a53: Fix a render effect that reads sources written by two concurrent, non-entangled transactions committing the wrong value and then never updating (#3322). Effects have one value slot and do not entangle transactions, so the second transaction's recompute overwrote the value the first still owed a run for; the first's silent commit then published it, and the second found nothing left to run. Such effects are now re-derived against the committed world at each owed commit, ahead of the effect phase. The same mechanism covers a mainline recompute of an effect a live transaction had computed (the transaction's commit re-derives it), and render effects recomputing with no transaction active no longer see a foreign transaction's staged signal through the read fast path — the mask the slow path already applied.
+- ae0ec3f: Fix `deep()` over optimistic and derived stores missing writes it should hear, and derived views churning row identities under an optimistic overlay (#3323).
+  - `deep(view)` / `deep(view[i])` over a derived view — `createOptimisticStore(base)` or a projection whose backing is another store — never re-ran when the base store was written, while per-key reads on the same view did. A view's targets chain to the inner store's proxies and base writes bump the inner record's witness nodes; the walk never subscribed them, and it resolved children to fresh non-chained wrappers of the base raw instead of the chained row targets the view serves. The walk now reads through the whole chain and resolves children to the targets the get trap would serve.
+  - `deep()` over any optimistic store was deaf to every write on a row added under a held action: the row lives in presence/value overrides, not the committed backing, and the walk enumerated the raw backing. The `ownKeys` / `getOwnPropertyDescriptor` trap bodies are now shared helpers the walk uses, so the walk sees exactly what readers see.
+  - A derived view's untouched rows came back as fresh proxies for the life of an optimistic action (`view.map(r => r)` was O(n) new identities per action) and snapped back at settle. The optimistic diff compared the inner store's child proxies to the draft's raws and marked every row changed; it now compares unwrapped values. Chained targets serving from a pending backing resolve inner-owned raws to the inner proxy before wrapping, and `snapshot()` composes outer overrides below the root.
+
+  Only `deep()`, the chained-view read path, and the optimistic diff changed; plain-store reads and writes are unaffected.
+
+- 1c9e9e7: Fix a held transaction being re-entered while an unrelated flush finalizes — through a store commit hook (`deep()` readers of a projection), a boundary check, or a recompute — and that flush then committing the transaction's state and running its effects as if it still owned the batch, leaving the UI permanently stale once the transaction settled (#3319). Finalization now captures the batch it started with and settles nothing an entered transaction adopted (a completing transaction still settles its own separate containers). Effects follow ownership: a run is applied by the commit of the transaction that computed its value, so the entering flush still applies everything it computed mainline — the write that caused it reads and renders together — while runs owned by the still-held transaction park with it and release when it completes. Optimistic lanes are unaffected; they apply their own effects ahead of their transaction by design.
+- 05725e8: Trim the #3319/#3322 fixes: `runEffect` reads `activeTransition` directly instead of a `parkHeldOwners` flag toggled around the ordinary effect phase (lane runners and the creation-time immediate run mark themselves exempt with `LANE_RUN`), and `contestEffect` is inlined into its single call site in `recompute`. Behavior-identical; -41 B minified on the core floor.
+- 27aee36: Mounting N rows in one flush was O(N²) when each row created a user effect whose source was written during row creation (the `ref` effect pattern). An unmarked node entering an already-marked pure heap invalidated the `markHeap` memo, so every later mid-tick memo pull re-walked the whole heap. The insertion now marks the incoming node in place instead; the mount is linear (8000 rows with a ref effect each: 231 ms → 12 ms).
+- fe3ab92: Make a failed lazy() hydration observable instead of a silently dead page (#3338):
+  - The client's "was not preloaded before hydration" error no longer says to add a Loading boundary — none is required for root-level `lazy()`. It now names the actual cause: the server serialized no client entry for the module (check the server log for "Asset manifest returned no client assets for module"), or the hydration id namespaces are misaligned.
+  - An uncaught error that halts the reactive system is handed to `reportError` where the platform provides it, so it reaches `window.onerror` / error monitoring. Creation-time throws (a lazy miss during the hydration render) are converted to status by ancestor recomputes and never reached the top; console.error was their only trace.
+  - `hydrate()`'s "module preload failed → fall back to client render" path no longer runs for a document root, where a client render is impossible (the shell cannot be created) and died deep in the walk with an unrelated "Hydration Mismatch" as an unhandled rejection. It now reports an explicit error carrying the preload failure as its cause.
+
+- 51c201f: mapArray SMALL-MOVE fast path: rotates, swaps, small displacements, and removals leave a keyed window that is the old window shifted with a bounded number of genuinely displaced identities — but the general diff paid O(newLen) regardless (window key-map, four full-length staged arrays, element-copied prefix/suffix), measured at ~50-140µs/op on 1000 rows against ~20µs of actual DOM work (the jfb-reorder suite's stable 1.8-4x deficits). The fast path scans first (two-pointer aligned-run detection with bounded realignment lookahead and a compare budget, so hopeless shapes like reverse bail almost immediately with nothing allocated), then commits by slicing the live arrays (native memcpy preserves the fresh-identity contract downstream change propagation relies on), copying only shifted runs, patching the displaced few, and disposing leftover sources. Gated to large trimmed windows (the trims already make small windows cheap), scoped to the plain identity-keyed mode (row-signal/custom-key/index modes keep the general path — halves the code for the same benchmark wins), and kept out of updateKeyedMap's function body (inlining deoptimized the general path). Rotate 140→6µs, swap 94→4µs, displace3 54→5µs; removefirst and reverse at parity; ~0.5 kB brotli in mapArray-bearing bundles.
+
+  Cold path (2026-09-09): the scan and the commit are two functions, so a pass that scans and bails — a full REPLACE, typically a page's first structural pass — compiles only the scan; and a 65-compare pre-probe in `updateKeyedMap` (is a mid-window item still within ±32 of its old position?) turns a replace away before the scan is even called. Interleaved A/B against `next`, cold (fresh page per sample) and warm: run/replace/runlots/clear at parity, swap and rotate ~0.5x, reverse/shuffle unchanged. On Octane's js-framework board: reorder suite 1.71x → 1.15x vs octane, js-framework 1.27x → 1.10x.
+
+- 2fa7539: Observe tier: no post-construction fields on reactive nodes.
+
+  The observe build stamped `_name` on every node, `_owner` on `createSignal`
+  nodes and live `_subCount`/`_depCount` edge counters on linked nodes after the
+  node literal — exactly the hidden-class transitions the prod literals are
+  shaped to avoid. Measured against prod on the reactivity benchmark the tier
+  cost +15% overall with creation tests 2–3× under polymorphic load.
+  - Node factories (`computed`, `createEffectNode`, `signal`, `slotSignal`,
+    `createOwner`) now have two literals selected at build time: prod, and
+    observe = prod plus its `_name` slot (`_owner` too on signals). Default
+    labels (`signal`, `computed`, `effect`, `trackedEffect`) come from the
+    literal, so the `createEffect`/`createRenderEffect`/`createTrackedEffect`
+    wrappers no longer spread a fresh options object per effect to inject one.
+    A dist test pins observe's key set to prod's plus the slots.
+  - Edge counters are gone. `HUGE_FAN_OUT` is counted by the notify walk a
+    committed change already makes over its subscribers, `HUGE_FAN_IN` by one
+    walk of the recompute's trimmed dep list at the end of the pass.
+    Both therefore fire on the work — the change / the recompute — rather than
+    on the link, once per node and again after +500 growth (a WeakMap, not a
+    node field). `WIDE_WRITE` (engine) counts the subscriber list on the write
+    and hands over to `HUGE_FAN_OUT` at 2000, so a change never carries both.
+    Messages: "changed with N subscribers" / "tracked N sources".
+  - Prod artifacts are unchanged apart from removing a leftover
+    `...(false ? {...} : options)` spread in `createEffect`.
+
+- 0961d97: Observe tier: first-class interaction records and a typed record channel.
+  - `attribution.interactions()` and `InteractionEvent`: one record per `withInteraction` dispatch with `at`, `handlerMs`, `writes`, `runs`, `created` (computations built in its runs), `runMs`, the `holds` and `navigations` attached, and `settledMs`/`outcome` (`idle` | `committed` | `held`) once everything it caused is through.
+  - `attribution.subscribe(type, listener)` for `"rerun" | "interaction" | "hold" | "navigation"`, delivered synchronously as each record completes; the bare `subscribe(listener)` form is unchanged.
+  - `RerunEvent.at` and `HoldEvent.at` — absolute times on the `performance.now()` clock beside the existing durations.
+  - `HoldEvent.acknowledgements` replaces `acknowledgedBy`: one `{ kind, source, reader? }` per affordance, `reader` the owner path of the effect that painted it. `feedback().sources[].acknowledgedBy` still ranks by `kind:source`. `@solidjs/diagnostics` artifact format version 4 (holds carry `acknowledgements`; assertion evidence likewise).
+  - `NavigationRef.params` values may be `undefined` (an optional segment left unbound).
+  - `OBSERVE.exclude(owner)` / `OBSERVE.isExcluded(subject)` — an observer rendering inside the app it watches marks its own subtree; diagnostics about it are suppressed and the engine records none of its runs.
+  - `solid-js` re-exports the tier types from its root: `InteractionRef`, `NavigationRef`, `OriginRef`, `DiagnosticEvent` and friends, and the engine's record types (`ChangeOrigin`, `RerunEvent`, `HoldEvent`, `NavigationEvent`, `InteractionEvent`, …).
+
+- 1807f7f: Observe tier: split dev-only checks from production-legal observability wiring.
+
+  **Breaking (pre-release):** `DEV.diagnostics` moved to a new `OBSERVE` export
+  — `OBSERVE.diagnostics.{subscribe,capture,emit}`, `OBSERVE.subjectOf(event)`.
+  `DEV` keeps the devtools surface (`hooks`, `getChildren`/`getSignals`/
+  `getParent`/`getSources`/`getObservers`) and gains the console face
+  (`DEV.report`, `DEV.setConsoleFooter` — formerly
+  `DEV.diagnostics.setConsoleFooter`). Both are exported from `@solidjs/signals`
+  and `solid-js` (client and server).
+
+  **Breaking (pre-release):** the attribution engine is its own entry.
+  `DEV.attribution.enable()` and friends are now
+  `import { attribution } from "solid-js/attribution"` (or
+  `@solidjs/signals/attribution`) — `enable/disable/subscribe/history/why/
+subscriptions/costs/waterfalls/holds/feedback/markFlight/format/formatOrigin`,
+  plus the record types (`RerunEvent`, `ChangeRecord`, `ChangeOrigin`,
+  `HoldEvent`, …) which were previously unexported. The runtime keeps only the
+  core's side as `OBSERVE.attribution`: `install(hooks)`/`installed` (the hook
+  slot an engine — built-in or a devtools' own — installs into) and
+  `withInteraction(ref, fn)` (the frame the web runtime opens around every event
+  dispatch; `fn()` when no engine is installed). A build that never imports the
+  engine never ships it: the observe tier costs ~1.3 KB brotli over prod on the
+  CSR scenario, the engine 9.7 KB more when enabled. The import is legal in
+  every tier — prod resolves an inert engine with the same surface.
+  `@solidjs/diagnostics` requires `OBSERVE` and imports the engine itself; it now
+  works against observe builds.
+
+  **New build tier.** Every package with wiring ships `<entry>.observe.{js,cjs}`
+  beside its prod and dev artifacts, selected by a new `observe` export condition
+  (listed after `development`, so dev still wins when both are set): signals
+  `dist/observe/` + `dist/node.observe.cjs` (each with an `attribution` entry
+  beside `index`; the flat dev/CJS builds are code-split so both entries share
+  one module instance), solid-js `solid.observe.*` and
+  `server.observe.*`, web `web.observe.*`, universal `universal.observe.*`.
+  Observe builds keep attribution hook sites, owner labels (`_name`, flow-control
+  memo names, component roots), graph edge counters and the diagnostics channel;
+  they fold out strict-read checks, invariants, forbidden-scope guards, devtools
+  brands and all console output. Entries without wiring (frames, server-functions,
+  storage, h, html, element) fall through to prod under `observe`. Signals gates
+  on `__OBSERVE__` (dev implies observe; asserted at init), solid-js/web/universal
+  on the `"_SOLID_OBSERVE_"` literal. Default prod artifacts are unchanged apart
+  from the new `OBSERVE = undefined` export; `_name` is reserved from property
+  mangling so the cross-package label survives in the observe tree.
+  `OBSERVE.diagnostics.emit` accepts an explicit `ownerPath` for hosts whose
+  owners are not signals' owners (the SSR runtime).
+
+- 645ec0d: Projection leaf nodes are released when their readers let go (#3351). Every node materialized under a projection or derived store is linked into the projection computed's firewall child chain; the chain was append-only, so a long-lived keyed record retained one node — and the last value it served — per leaf ever read, until the projection itself was disposed. The chain is now doubly linked and the unobserved sweep unlinks the node in O(1), so deleted rows and their nested objects are collectable while the projection stays live, and the per-mark child walk covers live leaves only.
+- 12c3be9: Projection and derived-store drafts now open as prototype overlays like plain stores, so a derive that touches one root key of a wide keyed record is O(written) instead of cloning the whole raw on every recompute (#3352: ~17 ms → ~0.02 ms per derive at 20k keys). Optimistic families, chained backings, and arrays keep the clone path. Also fixes an overlay commit bug this surfaced: a child's flatten could resurrect a slot that the parent's earlier fold in the same batch had replaced or deleted.
+- 3a5fe8c: Refuse `flush()` inside an action body. An action's writes are held by its transaction until it settles, so a flush can't reveal them — and the drain loop only exits once the ambient transition is cleared, so it parked the transaction mid-slice and every write that followed in the body landed as a plain, committed write, visible before the action finished. DEV now throws `FLUSH_IN_ACTION`; prod skips the drain (the `flush(fn)` form still runs `fn`). The same drain inside `restoreTransition` is skipped when a nested action resumes synchronously inside an outer body, which had the same leak.
+- a39415c: **Breaking:** all runtime packages are ESM only and declare `engines.node >= 22.12`.
+
+  Every `.cjs` artifact, every `require` branch in the exports maps, and the `types-cjs/` declaration mirrors are gone. Node 22.12+ loads ESM through `require()` natively, so a CommonJS host resolves the same files through the same export conditions it always did (`browser`, `node`, `development`, `observe`, …) — there is one module graph per tier rather than two to keep in step. `main` now points at the ESM server entry.
+
+  For consumers:
+  - ESM apps, Vite, Vitest, Bun, Deno, workers: no change.
+  - CommonJS Node apps: require Node 22.12 or later. `require("solid-js")` keeps working.
+  - TypeScript CommonJS projects: use `module: "NodeNext"` (TS 5.8+), which type-checks `require()` of ESM packages; `module: "Node16"` will report TS1479.
+  - Jest: needs Node 22.12+ for `require(esm)`; any preset that maps specifiers to `.cjs` paths (as `solid-jest` does for Solid 1.x) has nothing to map to and must be updated.
+
+  `@solidjs/signals` drops its flat `dist/node*.cjs` builds; its ESM entries (`dist/prod/`, `dist/observe/`, `dist/dev.js`) are the only ones. `@solidjs/babel-plugin` and `@solidjs/compiler` (build-time tooling loaded by Babel/Node) are unchanged.
+
+- 4e730a9: `spread()` reads a `merge()` proxy through its sources instead of through the proxy. A spread mixed with other attributes compiles to `spread(el, merge(statics, () => rest))`; going through the proxy cost merge's `keys()` (a `Set` plus an own-enumerable scan of every source) and then, per key, a right-to-left `in` walk of the sources, on every run. The spread now iterates the flattened sources directly — the union of own string keys, later sources overriding earlier, `children`/`ref` excluded — and enumerates each source through the same single-trap path as `readShallow()`. `omit()` is not a merge and stays opaque: it is enumerated through its own filtering trap. Own keys only, per source: a key an earlier source owns and a later source merely inherits resolves to the earlier source's value (the proxy's `in` walk saw the inherited one) — spread has always applied own properties only. `@solidjs/signals` gains an `@internal` `mergeSources()`. Guarded by the Tier-1 `spread-enumerate` bench (`merge(static, reactive)` row). `readShallow()` re-maps a class array element-wise instead of copy-on-write (−58 B brotli on `web.js`; `className` allocates for an array anyway, measured at parity).
+
 ## 2.0.0-rc.7
 
 ### Patch Changes
