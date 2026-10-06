@@ -1,5 +1,41 @@
 # @solidjs/diagnostics
 
+## 2.0.0-rc.10
+
+### Patch Changes
+
+- fd36d37: `captureDiagnostics` and the browser bridge hold the shared attribution engine through the release `attribution.enable()` now returns, and release only their own hold at the end of a capture — a profiler track or an APM adapter enabled beside the capture is left in place (previously `disable()` tore the engine down for every consumer).
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [43fae6e]
+- Updated dependencies [fd36d37]
+- Updated dependencies [c74365d]
+- Updated dependencies [f884589]
+- Updated dependencies [fd36d37]
+- Updated dependencies [a124577]
+- Updated dependencies [ed60f05]
+- Updated dependencies [739404d]
+- Updated dependencies [ab254b0]
+- Updated dependencies [ebc1b03]
+- Updated dependencies [d2d7bd4]
+- Updated dependencies [9c6c5cd]
+- Updated dependencies [c9e1954]
+- Updated dependencies [55779c0]
+- Updated dependencies [84562fc]
+- Updated dependencies [28fcc9b]
+- Updated dependencies [f2bd662]
+- Updated dependencies [756b1b3]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [310116a]
+- Updated dependencies [e10a4ba]
+- Updated dependencies [eb3d699]
+- Updated dependencies [709c02b]
+- Updated dependencies [27bb3fa]
+  - @solidjs/signals@2.0.0-rc.10
+
 ## 2.0.0-rc.9
 
 ### Patch Changes
