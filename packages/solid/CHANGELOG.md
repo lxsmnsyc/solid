@@ -1,5 +1,115 @@
 # solid-js
 
+## 2.0.0-rc.10
+
+### Patch Changes
+
+- fd36d37: `attribution.enable(opts)` now returns the release of the hold it takes (idempotent, like `subscribe`), and options combine across holds by the most demanding request per key (the log prints while any holder wants it, a check runs while any holder wants it at the most sensitive threshold asked for, `historyLimit` is the largest), so a hold adds to what the engine does and never takes away what another asked for — a track enabled with `log: false` beside a console session leaves its log alone, in either order — instead of every call rebuilding the options from defaults. `disable()` is the full teardown whatever holds are outstanding (the console's reset), so re-enabling to reopen a window and calling `disable()` once cannot strand a hold. `enablePerformanceTracks` releases through the token. Dev builds create a component's `console.createTask` task only for components rendered while an attribution engine is installed — the stack capture per call roughly doubled dev mount for a session with nothing enabled; the tracks enabled at bootstrap still see every component's site.
+- fd36d37: Attribution engine: timeline records, and a `flushStart` hook
+
+  Five new listener-gated records on `attribution.subscribe`: `create` (a computation's creation run — the mount flame), `effect` (an effect callback, timed and joined to its compute run), `flush` (one scheduler drain: runs, creations, whether it parked a transition, the interaction it served), `flight` (an async flight from origin to landing or abandonment, with the async node's owner path) and `fallback` (a loading boundary's fallback from show to hide). None is built, logged or folded unless something is subscribed to its type, so the console/agent readers pay nothing for records only a timeline wants. `OBSERVE.subjectOf` answers for the node-bearing ones.
+
+  Core: a `flushStart` hook beside `flushEnd` (one drain, never nested), and `effectRunStart` now fires in observe builds like its `effectRunEnd` twin, so writes inside effect callbacks carry their `effect` origin in observe too, not only in dev. The observe core grows by 67 bytes minified; prod is byte-identical.
+
+  The engine's effect-frame → node map is now filled by the first write inside a callback rather than by every callback (every reader resolves it through a write's origin, and most effect callbacks never write), which removes a WeakMap write per effect callback from the enabled engine's hot path.
+
+  `@solidjs/web/performance-tracks` paints the new records: creation runs and effect callbacks on the `Effects`/`Memos` tracks, drains on the `Propagation` track (one wave per drain), flights and fallbacks on a new `Async` track.
+
+- 43fae6e: `onCleanup` callbacks on one owner now run in reverse registration order (unwind), restoring the 1.x #1562 semantics; in production, component bodies share the enclosing owner, so a parent that registers cleanup before rendering its children now tears down after them, matching dev (#3572).
+- fd36d37: Rename the compilers' `componentNames` option to `sourceNames`, now `boolean | { components?: boolean }`. `sourceNames: true` (or `{ components: true }`) is what `componentNames: true` was — the tag as written in source as `createComponent`'s third argument, on DOM and SSR output. The option is now the home for every kind of source name the compilers can carry into output for the dev and observe runtimes to label the reactive graph with (binding effects and primitives follow); the object form picks kinds. `@solidjs/compiler` rejects `componentNames` as an unknown option, so a stale `@solidjs/vite-plugin` fails loudly rather than compiling without labels.
+- c74365d: `createRoot` JSDoc now states that a root created inside an owner is disposed with it (detach with `runWithOwner(null, …)`); MIGRATION note added.
+- a10d33b: Hybrid memo/signal handoff waits for the server answer to land and opens no pending window. An `ssrSource: "hybrid"` `createMemo` or function-form `createSignal` over an async generator re-ran the client generator at creation — a fresh flight ahead of the still-pending server answer, superseding it and reading pending from creation until the client's first yield — so a streamed `<Loading>` resuming to claim its fragment after the answer landed selected its fallback against resolved server content: a "Hydration key miss" warning and a flash of the fallback over the streamed content (the #3574 failure, on the value-shaped takeover). The handoff now follows the store's rules (#3551, #3593): it waits for the adopted answer to land, lands that answer as the handoff stream's synchronous first step, discards the client's duplicate first yield, adopts a rejected server answer, and is superseded by a dependency change before the landing. The node reads settled through the handoff, and `isPending` is false for it, until the client generator produces something new. Sync and promise-shaped hybrid computes are unchanged.
+- ae2bc9f: Hybrid store hydration waits for the server's answer before handing off to the client (#3498)
+
+  Root cause: the hybrid store gate flipped synchronously at the end of the claim pass. With `loadingValue`/`seedLoadingValue` the server serializes a _pending_ placeholder whose real answer arrives later over the stream; flipping before it landed let the client takeover supersede the server flight, so the engine dropped the server's answer and the store never showed it.
+
+  The handoff now follows four rules:
+  1. **It waits for the first server answer to land.** Synchronous when the serialized value is already settled, as before. When it is pending, the handoff happens when that answer lands — resolve or reject — by adopting it as a one-yield stream whose next pull (the engine's own continuation after the landing commits) is the handoff. It never waits on hydration end and never holds hydration open.
+  2. **Only the handoff run's first yield is the duplicate.** Later runs (a dependency change, `refresh()`) run the client source against the real draft and commit their first yield normally; previously every run kept discarding it.
+  3. **A rejected server answer is the adopted answer.** The store surfaces the error until a `refresh()` (a non-handoff run) replaces it; the client's handoff run does not paper over the rejection.
+  4. **A dependency change before the pending answer lands supersedes it.** Like any new pending change, it cancels the incoming server answer: the store goes live on that run — genuinely new work, not a handoff, so its first yield commits — and the abandoned server flight's landing or rejection is dropped without applying to the store or running it again.
+
+- cf61b8e: Hybrid store handoff no longer opens a pending window (#3574). An `ssrSource: "hybrid"` store's client takeover run — the re-run that continues from the adopted server answer — made the store read pending until its duplicate first yield landed, so a streamed `<Loading>` resuming to claim its fragment after the answer landed selected its fallback against resolved server content: a "Hydration key miss" warning and a flash of the fallback over the streamed content. The handoff now lands the adopted answer as a synchronous first step (generator and promise-shaped sources alike); the store reads settled through the handoff, and `isPending` is false for it, until the client source produces something new.
+- ed60f05: A cleanup that disposes its own root (or throws) runs exactly once: the disposal list is detached before it runs (#3601).
+- f41c6a4: Fix `renderToString` exiting the process on a late async rejection (#3570). Every server async flight settles an internal deferred; under `renderToString` (no serialization channel, the sync `<Loading>` path never awaits the pending source), in a `<NoHydration>` zone, or for an unread source, nothing observed it, so an async memo/store/projection that rejected after the HTML was returned became an `unhandledRejection`. The deferred is now observed at creation; consumers see exactly what they saw before.
+- f41c6a4: Fix `renderToStream` hanging or throwing `TypeError: Cannot read properties of undefined (reading 'emit')` when an async read that rejects is the direct child of `<Loading>` (#3569).
+  - `solid-js`: a bare child's throw (`<Loading>{data()}</Loading>`, or a component whose return is the read) now routes through the boundary's error handler exactly like a template hole's does — the fragment rejects and the client re-renders the subtree (`handling: "client"`), instead of escalating to a request failure pre-flush.
+  - `@solidjs/web`: a render failure (`failRender`) now completes the consumer — the awaited promise resolves with the HTML produced so far, `pipe()` ends its sink, `pipeTo()`/`readable` close the writable — and the serializer's completion no longer assembles a shell on the disposed render.
+
+- fd8b3df: Fix `hydrate()` halting with `TypeError: Cannot read properties of null (reading '_config')` when a `useHead({ tag: "link", props: { rel: "stylesheet", href } })` sheet is still loading as hydration reaches it (the default with an async entry script), including on a late streamed boundary resume. The `waitAsset` gate memo is created without an owner, and the hydrating `createMemo` tried to peek a hydration id from that null owner; the gate is now `transparent`, so hydration never sees it. `useHead` also no longer gates stylesheets while hydrating: that content is already visible, and a pending read inside a boundary's claim window made the boundary render fresh DOM beside the server's.
+
+  A streamed `<Loading>` boundary whose fragment swap the server holds on a stylesheet (`$dfs`) now resumes when the swap lands, not when its `_fr` record settles. Resuming on the settle claimed against a document that did not have the content yet, then the delayed swap inserted a second copy.
+
+- c9e1954: Loading `on` follows the frame (#3540). When a dependency of `on` changes, the boundary still stops waiting on its current content immediately — the frame no longer waits for it — but its fallback swap now lands with the same frame as the change that caused it, instead of in the current frame beside content the change is still holding. Navigating product A → B inside an action (or by a write whose async is in flight) with the shell reading `product(id)` outside a `<Loading on={id()}>` that reads `comments(id)` goes `[A] → [B + spinner] → [B + comments]`, not `[A] → [A + spinner] → [B + spinner] → [B + comments]`. If the comments land before the shell, no fallback is ever shown. Nothing else holding the frame, the fallback and the committed change land together in the same pass, as before.
+
+  Read `latest()` in `on` (or any display-ahead state: `isPending()`, an optimistic signal) to keep the previous behavior — the fallback shows now, beside the still-held frame.
+
+  If the same data the boundary is waiting on is also read outside it, the frame waits on that read and no fallback appears; DEV warns `LOADING_ON_OUTSIDE_HOLD` with the fix (move the outside read under the boundary). A frame held by the write's action or by other data past the content's landing shows no fallback either — a race, not a warning.
+
+  `Errored` no longer accepts `on` (nor `createErrorBoundary` an `on` option). It was added in #3556 and never released in a stable — rc-only. Retry through the `reset` the fallback receives (`fallback={(err, reset) => ...}`), or re-mount the boundary on the dependency (`<Show keyed when={id()}>`).
+
+- 55779c0: `Loading`'s `on` prop is a dependency list, not a key (#3540). The expression is tracked and its value is never compared: a write to anything it reads — plain, optimistic, or a source going pending — **re-arms** the boundary. A re-armed boundary that has something pending under it shows its fallback again; one with nothing pending does nothing (no fallback flash). `latest()` inside `on` is redundant.
+
+  The re-arm lands in the **current frame**. A write that makes content pending is held by the readers still showing the old content, and its batch commits when the data lands — but the boundary's swap to its fallback is not part of that batch: it is applied at the flush's finalize, mainline, past any transaction park, so the fallback shows now beside whatever the write is still holding elsewhere on the page. Previously the swap was staged into the pending write's transaction and landed with its commit, by which point the data had arrived and the fallback never showed whenever any other reader of the same data existed (#3524, #3529). The children are not re-created; they stay alive behind the fallback.
+
+  `Errored` accepts the same `on`: while it shows its error fallback, a change to a dependency clears the caught error and retries the children (reset keys). `createErrorBoundary` takes `{ on }` as its third argument.
+
+  Boundaries are exempt from A29 born-held: a `Loading` mounted while a transaction holds what it reads shows its fallback now (and reveals the staged content at the commit) instead of being born held with the transaction. Born held stays right for a plain memo or effect — published, its value would tear the frame — but a boundary that has not revealed is the exception by definition: its job is to catch what is not ready under it rather than let it hold. This also closes the static-vs-function-child `<Show keyed>` inconsistency from the issue.
+
+- 84562fc: `LOADING_ON_OUTSIDE_HOLD` now recommends the structural fix (one hold owns the data, or `isPending()` for the wait) and mentions `latest()` in `on` only as a capability. Docs and JSDoc for `Loading on` updated to match.
+- 28fcc9b: The DEV `LOADING_ON_OUTSIDE_HOLD` diagnostic now reports only the deterministic shape: `on` re-armed a Loading boundary while the very async source it is waiting on is also read by a live reader outside it, so the frame is held on that source and the fallback can never be seen (`data.source` names it; the fix is to move the outside read under the boundary). The after-the-fact report — the frame held by the write's action or by other pending data past the content's landing, so the staged fallback was cleared before display — is removed: that is a race the developer does not control, a fallback that loses it is a legitimate outcome, and the engine cannot tell an action that awaited exactly this data from one that awaited something slower.
+- fd36d37: `@solidjs/web/performance-tracks`: Solid's records on the Chrome Performance panel
+
+  `enablePerformanceTracks(options?)` paints the attribution engine's records — re-runs (`Effects`/`Memos`, coloured by self time, `warning` for a provably wasted run), interactions (input delay, handler, settle by outcome), holds (`warning` for a silent hold, `error` for a long one — the engine's own verdicts), navigations (named by route) — and the web runtime's server-function `call` and `frame` records (`Server`) as custom tracks in the group `Solid`, through the panel's extensibility API. Every span is emitted retroactively from the record's own `performance.now()` stamps; labels come from the shared formatters (`formatOrigin`, `formatRerun`, `ownerPath`), so the timeline agrees with the diagnostics artifact by construction. Dev builds emit `performance.measure` entries with `detail.devtools` (why-chain tooltips, cause/deps/blocker properties; entries cleared in batches); observe builds emit `console.timeStamp` spans with a `0.05ms` floor and scrub value previews and non-button element text. Prod builds fold the module to a no-op. Options: `attribution` (the engine hold's options, `log: false` by default — asking for no console log, which quiets it only while no other holder wants it), `minMs`, `rich`, `group`, `scrub`. Returns the release of this adapter's hold — the engine's and its own.
+
+  `solid-js` now exports `ownerPath` (already public on `@solidjs/signals`) — the root-first owner labels of a subject — on both the client and server entries, so in-process consumers of the records (this adapter) can label a re-run by its component path without importing signals directly.
+
+- fd36d37: Performance tracks: findings as markers, JSX-site stacks, richer properties
+  - Every `DiagnosticEvent` delivered while `enablePerformanceTracks()` is on becomes a marker on the Performance panel's Timings track (`SILENT_HOLD — <App> › <Search>`), coloured by severity; at `warn` or worse it is annotated as a performance issue (`detail.devtools.performanceIssue`) for the Insights sidebar, linking the repair guide's section for the code. Under the scrub only the code, kind and owner travel.
+  - In dev, the component wrapper stores a `console.createTask(label)` task on the component record (`_component.task`) for components rendered while an attribution engine is installed (a session with nothing enabled pays nothing), and every span and marker is emitted inside the nearest component's task, so the entry's stack in the panel points at the JSX site that rendered the component.
+  - Rich mode adds `Owner path` (the unfolded runtime path), `Node id` and the root write's `Origin` to every node span.
+  - `solid-js` exports `diagnosticGuideUrl(code)` — the repair guide URL the console footer already prints.
+
+- fd36d37: `@solidjs/web/performance-tracks`: a `Propagation` track (replacing `Scheduler`)
+
+  Nothing re-renders in Solid, so React's component flame has no counterpart here; the picture a Solid developer wants is the graph a write travelled. The `Propagation` track paints each scheduler drain as a wave named by the writes that started it and what they reached (`count 0 → 1 — click on button#next · 5 runs, 1 unchanged`), and every run inside it — compute runs, creation runs, effect callbacks — at its own time, labelled by what made it run (`<TodoRow> › effect ← doubled`). The panel stacks the runs beneath their wave by time, so a wide flat wave is a coarse signal everyone depends on, a deep one a chain of memos, and a `warning` node with nothing after it the equality cutoff at work; a wave that mostly re-ran unchanged nodes is itself a `warning`. The wave span ignores `minMs`, so a fan-out of runs too small to paint still reads as its count.
+
+  Node labels fold framework structure into what the developer wrote: a flow control's own nodes (`<Show>`'s `condition value` / `condition` / `value`, a boundary's `children` / `boundary` / `value`, `<Switch>`'s `conditions`, `<Reveal>`'s `reveal order`) present as the tag, and a `primitive.local` name (the store convention, and what the compiler will emit for a composed primitive's internals) as the primitive — with the runtime's name kept in the span's `Node` property. Presentation only: the records are what the engine delivered.
+
+  Engine: `ChangeRecord` carries `nodeId` (the written signal's, or the changed memo's — the same id space as `RerunEvent.nodeId`), so a derived cause joins the run that produced it and repeated writes to one signal join each other after the record has left the process. `@solidjs/signals`' boundary nodes and `<Switch>`'s condition-builder memo are now named in observe builds (`children`, `boundary`, `value`, `reveal order`, `conditions`) where they read as anonymous `computed`s in owner paths before.
+
+- eb3d699: Dev: warn with `UNTRACKED_READ_AFTER_AWAIT` when an async computation first reads a signal, memo, or store property after an `await`. Such reads are not dependencies, so the computation silently keeps its old result when they change. The check attributes the read to its computation through V8 async stack traces (Chromium browsers, Node, Deno, Bun; silent on other engines), runs only in dev builds, keeps dev settle timing identical to production, warns once per computation per signal/memo and once per store, and does not blame a continuation for reads made by effect callbacks, cleanups, or `action()` bodies it triggered.
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [43fae6e]
+- Updated dependencies [fd36d37]
+- Updated dependencies [c74365d]
+- Updated dependencies [f884589]
+- Updated dependencies [fd36d37]
+- Updated dependencies [a124577]
+- Updated dependencies [ed60f05]
+- Updated dependencies [739404d]
+- Updated dependencies [ab254b0]
+- Updated dependencies [ebc1b03]
+- Updated dependencies [d2d7bd4]
+- Updated dependencies [9c6c5cd]
+- Updated dependencies [c9e1954]
+- Updated dependencies [55779c0]
+- Updated dependencies [84562fc]
+- Updated dependencies [28fcc9b]
+- Updated dependencies [f2bd662]
+- Updated dependencies [756b1b3]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [310116a]
+- Updated dependencies [e10a4ba]
+- Updated dependencies [eb3d699]
+- Updated dependencies [709c02b]
+- Updated dependencies [27bb3fa]
+  - @solidjs/signals@2.0.0-rc.10
+
 ## 2.0.0-rc.9
 
 ### Patch Changes

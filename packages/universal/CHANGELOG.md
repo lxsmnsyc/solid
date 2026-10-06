@@ -1,5 +1,31 @@
 # @solidjs/universal
 
+## 2.0.0-rc.10
+
+### Patch Changes
+
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [43fae6e]
+- Updated dependencies [fd36d37]
+- Updated dependencies [c74365d]
+- Updated dependencies [a10d33b]
+- Updated dependencies [ae2bc9f]
+- Updated dependencies [cf61b8e]
+- Updated dependencies [ed60f05]
+- Updated dependencies [f41c6a4]
+- Updated dependencies [f41c6a4]
+- Updated dependencies [fd8b3df]
+- Updated dependencies [c9e1954]
+- Updated dependencies [55779c0]
+- Updated dependencies [84562fc]
+- Updated dependencies [28fcc9b]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [fd36d37]
+- Updated dependencies [eb3d699]
+  - solid-js@2.0.0-rc.10
+
 ## 2.0.0-rc.9
 
 ### Patch Changes
