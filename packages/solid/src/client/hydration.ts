@@ -648,6 +648,8 @@ const latchedOnce = new WeakSet<object>();
 // own compute, and an insert's compute renders the components in its JSX. Computes that return
 // data could take a serialized value; those that return nodes or functions cannot.
 const computeStack: number[] = [];
+// The computes of effects and render effects, whose value is not a memo's that could be adopted.
+const effectComputes = new WeakSet<object>();
 function isNodeLike(value: any): boolean {
   if (value == null) return false;
   if (typeof value === "function") return true;
@@ -667,9 +669,13 @@ export function readSerializedOrCompute(compute: (prev: any) => any, prev: any, 
     const total = performance.now() - start;
     if (computeStack.length) computeStack[computeStack.length - 1] += total;
     const own = total - nested;
-    const kind = isNodeLike(result) ? "nodes" : "data";
+    const kind = effectComputes.has(compute) ? "effect" : isNodeLike(result) ? "nodes" : "data";
     stats[kind + "Computes"] = (stats[kind + "Computes"] || 0) + 1;
     stats[kind + "Ms"] = (stats[kind + "Ms"] || 0) + own;
+    // The most expensive computes, with the start of their source, to tell what they are.
+    if (own > 0.5) {
+      (stats.top ||= []).push([Math.round(own * 10) / 10, kind, String(compute).replace(/\s+/g, " ").slice(0, 110)]);
+    }
   }
 }
 
@@ -1410,6 +1416,7 @@ function hydratedEffect(coreFn: Function, compute: any, effectFn: any, options?:
 
   // "server", "hybrid", or undefined — use serialized value from server
   markTopLevelSnapshotScope();
+  effectComputes.add(compute);
   coreFn((prev: any) => readSerializedOrCompute(compute, prev), effectFn, options);
 }
 
