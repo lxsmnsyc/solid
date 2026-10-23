@@ -2396,7 +2396,18 @@ export function hydrate(
   options?: { renderId?: string; owner?: unknown; onError?: ClientErrorHook }
 ): () => void;
 
+// EXPERIMENT(graph-hydration): times the synchronous part of hydration.
 export function hydrate(code, element, options = {}) {
+  const start = performance.now();
+  try {
+    return hydrateTimed(code, element, options);
+  } finally {
+    const stats = ((globalThis as any).__graphExp ||= { hydrateMs: 0, traces: 0, traceMs: 0 });
+    stats.hydrateMs += performance.now() - start;
+  }
+}
+
+function hydrateTimed(code, element, options = {}) {
   enableHydration();
   installHydrationRuntime();
   const hy = globalThis._$HY;

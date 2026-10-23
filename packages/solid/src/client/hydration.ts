@@ -530,6 +530,20 @@ export let tracing = 0;
 
 /** @internal — shared with the store adapter module (store-hydration.ts). */
 export function subFetch<T>(fn: (prev?: T) => any, prev?: T) {
+  // EXPERIMENT(graph-hydration): counts and times the trace runs.
+  const stats = ((globalThis as any).__graphExp ||= { hydrateMs: 0, traces: 0, traceMs: 0 });
+  // A trace inside a trace is already in the outer one's time.
+  const outer = tracing === 0;
+  const start = performance.now();
+  try {
+    return subFetchTimed(fn, prev);
+  } finally {
+    stats.traces++;
+    if (outer) stats.traceMs += performance.now() - start;
+  }
+}
+
+function subFetchTimed<T>(fn: (prev?: T) => any, prev?: T) {
   const ogFetch = fetch;
   const ogPromise = Promise;
   tracing++;
@@ -627,7 +641,37 @@ const latchedOnce = new WeakSet<object>();
 /** Shared “serialized init or run compute” path for memo/signal/optimistic/effect under hydration.
  *
  * @internal — shared with the store adapter module (store-hydration.ts). */
+// EXPERIMENT(graph-hydration): times each compute that runs during hydration by its own time,
+// without the computes nested in it, since a memo that reads another memo runs it inside its
+// own compute, and an insert's compute renders the components in its JSX. Computes that return
+// data could take a serialized value; those that return nodes or functions cannot.
+const computeStack: number[] = [];
+function isNodeLike(value: any): boolean {
+  if (value == null) return false;
+  if (typeof value === "function") return true;
+  if (typeof Node !== "undefined" && value instanceof Node) return true;
+  return Array.isArray(value) && value.some(isNodeLike);
+}
 export function readSerializedOrCompute(compute: (prev: any) => any, prev: any, options?: any) {
+  const stats = ((globalThis as any).__graphExp ||= { hydrateMs: 0, traces: 0, traceMs: 0 });
+  if (sharedConfig.done) return readSerializedOrComputeTimed(compute, prev, options);
+  const start = performance.now();
+  computeStack.push(0);
+  let result: any;
+  try {
+    return (result = readSerializedOrComputeTimed(compute, prev, options));
+  } finally {
+    const nested = computeStack.pop()!;
+    const total = performance.now() - start;
+    if (computeStack.length) computeStack[computeStack.length - 1] += total;
+    const own = total - nested;
+    const kind = isNodeLike(result) ? "nodes" : "data";
+    stats[kind + "Computes"] = (stats[kind + "Computes"] || 0) + 1;
+    stats[kind + "Ms"] = (stats[kind + "Ms"] || 0) + own;
+  }
+}
+
+function readSerializedOrComputeTimed(compute: (prev: any) => any, prev: any, options?: any) {
   const o = getOwner()!;
   // A node armed for takeover computes once its gate is open — its own
   // section's hydration is over even if the page's is not (#D8: a live
