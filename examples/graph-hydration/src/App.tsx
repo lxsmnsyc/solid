@@ -4,6 +4,7 @@ import { createMemo, createSignal } from "solid-js";
 
 declare const __WIDGETS__: number;
 declare const __WORK__: number;
+declare const __ASYNC__: boolean;
 
 /** Busy work that stands for an expensive compute, such as sorting or formatting a big list. */
 function work(seed: number): number {
@@ -27,6 +28,16 @@ function Widget(props: { index: number }) {
     return mode() === 0 ? sum : mode() === 1 ? sum / values.length : values[5] - values[0];
   });
   const label = createMemo(() => `${NAMES[mode()]}: ${summary().toFixed(2)}`);
+  // An async memo, such as one that loads data for the widget. Its busy work comes before the
+  // await, so a trace run of it pays for the work, as a compute that builds a request would.
+  const remote = __ASYNC__
+    ? createMemo(async () => {
+        const values = sorted();
+        const extra = work(seed + mode());
+        await new Promise(done => setTimeout(done, 1));
+        return `${values.join(",")} / ${extra}`;
+      })
+    : undefined;
   const bars = createMemo(() =>
     sorted()
       .map(n => "#".repeat(Math.round(n / 10) + work(n)))
@@ -37,6 +48,7 @@ function Widget(props: { index: number }) {
       <h2>Widget {seed}</h2>
       <p class="label">{label()}</p>
       <pre>{bars()}</pre>
+      {__ASYNC__ ? <p class="remote">{remote!()}</p> : null}
       <button onClick={() => setItems(values => values.map(n => ((n * 3 + 1) % 50) + 1))}>
         Run
       </button>
