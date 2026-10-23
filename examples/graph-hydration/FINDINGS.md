@@ -45,10 +45,13 @@ The example apps of the repository, with the graph off. "Memos with data" is the
 - The graph works: adopted memos keep their values and update on the next change.
 - It pays only for expensive synchronous memos. A cheap memo costs about as much to decode and link as to compute, and its entry triples the HTML. Sending only the memos that were slow on the server keeps the gain and drops most of the cost.
 - Trace runs of async memos cost almost nothing (0 to 0.5 ms a page).
-- In the example apps, the memos that the graph could skip take 1.6 to 9.3 ms, and are mostly the router's: path matching, `new URL`, `routerState.matches` and route `preload`, which loads data and cannot be skipped.
+- In the example apps, the memos that do not return nodes take 1.6 to 9.3 ms, and are mostly the router's (`@solidjs/router` 2.0.0-next.42, `dist/routing.js`). Few of them could be skipped:
+  - `url` returns a `URL` instance and `matches` returns route matches that hold component functions, so neither is plain data. The prototype sends neither, and "memos with data" in the table above counts them, so the share that a graph could skip is lower than the table shows.
+  - Route `preload` loads data, so it has to run.
+  - Much of their time is a first run: matchers built on first use and cold code. Skipping them at hydration moves that cost to the first navigation.
 - Most of hydration is one `insert()` per page that renders and claims its components. A graph cannot skip that: only components that never run can, which is resumability.
 
-So the idea is not worth adding to Solid 2.0 for apps built like these examples. It could be an opt-in for one memo with an expensive compute, such as `createMemo(fn, { ssrSource: "graph" })`. The router memos that run during hydration are a cheaper target.
+So the idea is not worth adding to Solid 2.0 for apps built like these examples. It could be an opt-in for one memo with an expensive compute, such as `createMemo(fn, { ssrSource: "graph" })`. The router's memos are no better a target: their work is needed, or only moves to the first navigation.
 
 ## Running it
 
