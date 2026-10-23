@@ -1,7 +1,7 @@
 // Measures the hydration of any page of the experiment branch, from the counters on
 // globalThis.__graphExp. Usage: node solid-app.mjs <label> <url> [runs]
-import playwright from '/Users/alexis/Documents/GitHub/brumate/node_modules/.pnpm/playwright-core@1.64.1/node_modules/playwright-core/index.js';
-import { findChrome } from '/Users/alexis/Documents/GitHub/brumate/benchmarks/harness/chrome.mjs';
+import playwright from 'playwright-core';
+import { findChrome } from './chrome.mjs';
 const { chromium } = playwright;
 const [label, url, runs = '7'] = process.argv.slice(2);
 const browser = await chromium.launch({ ...findChrome(), headless: true });

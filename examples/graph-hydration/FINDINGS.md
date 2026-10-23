@@ -65,4 +65,4 @@ VARIANTS="200 0 0 0,200 0 0 1,200 2000 0 0,200 2000 0 1" bash examples/graph-hyd
 TOP=1 bash examples/graph-hydration/bench/solid-apps.sh
 ```
 
-The scripts drive Chrome with `playwright-core` from the brumate repository's benchmark harness (`brumate/benchmarks/harness`), by absolute path. Point them at another copy to run them elsewhere.
+The scripts drive an installed Chrome with `playwright-core`, a dev dependency of this example. `CHROME_PATH` names another Chrome or Chromium. They use ports 3040 (the dashboard) and 3004 to 3020 (the example apps).

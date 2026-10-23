@@ -1,8 +1,8 @@
 // Measures how much of Solid 2.0 hydration goes to computes and trace runs, from the counters
 // that the experiment branch puts on globalThis.__graphExp. Usage: node solid-measure.mjs <label> [runs]
-import playwright from '/Users/alexis/Documents/GitHub/brumate/node_modules/.pnpm/playwright-core@1.64.1/node_modules/playwright-core/index.js';
+import playwright from 'playwright-core';
 const { chromium } = playwright;
-import { findChrome } from '/Users/alexis/Documents/GitHub/brumate/benchmarks/harness/chrome.mjs';
+import { findChrome } from './chrome.mjs';
 const [label, runs = '9'] = process.argv.slice(2);
 const browser = await chromium.launch({ ...findChrome(), headless: true });
 const results = [];
