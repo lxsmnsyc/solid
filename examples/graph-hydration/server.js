@@ -16,6 +16,11 @@ import path from "node:path";
 import { brotliCompressSync, createBrotliCompress, createGzip, constants } from "node:zlib";
 import { handleRequest } from "./dist/server/server.js";
 
+// EXPERIMENT(graph-hydration): GRAPH=1 sends each memo with the sources it read.
+if (process.env.GRAPH === "1") globalThis.__graphHydration = true;
+// Only memos whose compute took at least this long on the server.
+globalThis.__graphMinMs = Number(process.env.GRAPH_MIN_MS ?? 0);
+
 const root = path.dirname(fileURLToPath(import.meta.url));
 const PORT = process.env.PORT || 3040;
 

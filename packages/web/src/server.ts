@@ -2791,7 +2791,10 @@ export function renderToStream(code, options = {}) {
     // server-components codec names its plain signals and records which ones
     // each slot fill reads (solid's server edges.ts). Every other render
     // takes the plain paths.
-    edges: !!options.plugins && options.plugins.some(p => p.tag === "solid/server-component"),
+    edges:
+      (!!options.plugins && options.plugins.some(p => p.tag === "solid/server-component")) ||
+      // EXPERIMENT(graph-hydration): records the graph of every render.
+      (globalThis as any).__graphHydration === true,
     // The document face's live-hole carrier (Stage 4). Components render
     // under per-component context CLONES (spread copies), so a mutation on
     // the clone a server component armed under never reaches this root

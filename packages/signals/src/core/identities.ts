@@ -19,6 +19,14 @@ import type { Owner } from "./types.js";
 // package boundary, where a mangled field would not survive.
 let counts: WeakMap<Owner, [gen: number | undefined, n: number]> | null = null;
 const names = new WeakMap<object, string>();
+// EXPERIMENT(graph-hydration): the named signals by name, so a memo adopted from its graph
+// entry can read the sources that the server recorded for it.
+const byName = new Map<string, object>();
+
+/** @internal EXPERIMENT(graph-hydration): the plain signal named `name`, if one was made. */
+export function signalByName(name: string): object | undefined {
+  return byName.get(name);
+}
 
 /** @internal The identity of a plain signal named while identities were on. */
 export function signalName(node: object | undefined): string | undefined {
@@ -38,6 +46,7 @@ function identify(node: object): void {
   // handed to `createStore`) is one target under two server names: its
   // writes cannot be attributed (an empty name).
   names.set(node, names.has(node) ? "" : sid);
+  byName.set(sid, node);
 }
 
 /** @internal Name plain signals from now on (`on`), or stop. */

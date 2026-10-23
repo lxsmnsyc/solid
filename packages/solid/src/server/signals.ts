@@ -1307,6 +1307,8 @@ export interface EdgeHooks {
   run<T>(owner: object, fn: () => T): T;
   /** A memo was read: report what its last compute read. */
   report(owner: object): void;
+  /** EXPERIMENT(graph-hydration): what a memo's last compute read. */
+  reads(owner: object): Set<string> | undefined;
   /** A projection's compute, its reads reported as wide. */
   projection<F extends Function>(ctx: object, fn: F): F;
   /** The current slot fill ran a computation whose reads the server cannot see. */
@@ -1329,6 +1331,17 @@ export interface EdgeHooks {
 }
 /** @internal */
 export let edgeHooks: EdgeHooks | null = null;
+
+/** EXPERIMENT(graph-hydration): a value that serializes as plain data, with no functions or nodes. */
+function isPlainData(value: unknown, depth: number): boolean {
+  if (value === null || value === undefined) return true;
+  const type = typeof value;
+  if (type === "string" || type === "number" || type === "boolean") return true;
+  if (type !== "object" || depth > 4) return false;
+  if (Array.isArray(value)) return value.every(item => isPlainData(item, depth + 1));
+  if (Object.getPrototypeOf(value) !== Object.prototype) return false;
+  return Object.values(value as object).every(item => isPlainData(item, depth + 1));
+}
 /** @internal */
 export function setEdgeHooks(hooks: EdgeHooks | null): void {
   edgeHooks = hooks;
@@ -1501,7 +1514,9 @@ export function createMemo<T>(
     try {
       comp.error = undefined;
       comp.errored = false;
+      const started = performance.now();
       const result = run();
+      const took = performance.now() - started;
       comp.computed = true;
       // Async-shaped results engage the in-flight machinery — arm the
       // disposal flag before processResult wires continuations. Predicate
@@ -1526,6 +1541,22 @@ export function createMemo<T>(
         (options as any)?.serialize,
         loadingState
       );
+      // EXPERIMENT(graph-hydration): a memo with a plain value sends it with the sources it
+      // read, so the client can take both instead of running the compute. Only a compute that
+      // took at least `__graphMinMs` here: a cheap one costs the client less than its entry.
+      if (
+        edgeHooks !== null &&
+        edgeHooks.on() &&
+        ctx &&
+        !comp.moving &&
+        !comp.errored &&
+        took >= ((globalThis as any).__graphMinMs ?? 0)
+      ) {
+        const reads = edgeHooks.reads(owner);
+        if (reads && reads.size > 0 && isPlainData(comp.value, 0)) {
+          ctx.serialize(materializeId(owner as any) + "#g", [comp.value, [...reads]]);
+        }
+      }
     } catch (err) {
       if (err instanceof NotReadyError) {
         armDispose();

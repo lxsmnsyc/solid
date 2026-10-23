@@ -42,7 +42,9 @@ import {
   createRoot as coreRoot,
   getContext,
   setContext,
-  type Context
+  type Context,
+  signalByName,
+  readNode
 } from "@solidjs/signals";
 import type { Element as SolidElement } from "../types.js";
 import { IS_DEV, IS_OBSERVE } from "./core.js";
@@ -671,8 +673,30 @@ export function readSerializedOrCompute(compute: (prev: any) => any, prev: any, 
   }
 }
 
+// EXPERIMENT(graph-hydration): a memo whose graph entry the server sent takes the value from
+// it, and reads the sources that the server recorded, which links its edges, without running
+// its compute. Once only: a later run is a change, and computes. A source that the client has
+// not made falls back to the compute.
+const NO_GRAPH = {};
+const adopted = new WeakSet<object>();
+function adoptGraph(o: Owner): any {
+  if (adopted.has(o) || o.id == null || !sharedConfig.has!(o.id + "#g")) return NO_GRAPH;
+  adopted.add(o);
+  const [value, sources] = sharedConfig.load!(o.id + "#g") as [unknown, string[]];
+  const nodes = sources.map(name => signalByName(name));
+  if (nodes.some(node => node === undefined)) return NO_GRAPH;
+  for (const node of nodes) readNode(node as any);
+  const stats = ((globalThis as any).__graphExp ||= { hydrateMs: 0, traces: 0, traceMs: 0 });
+  stats.adopted = (stats.adopted || 0) + 1;
+  return value;
+}
+
 function readSerializedOrComputeTimed(compute: (prev: any) => any, prev: any, options?: any) {
   const o = getOwner()!;
+  if (!sharedConfig.done) {
+    const graph = adoptGraph(o);
+    if (graph !== NO_GRAPH) return graph;
+  }
   // A node armed for takeover computes once its gate is open — its own
   // section's hydration is over even if the page's is not (#D8: a live
   // node in the shell must not wait for a slow boundary). Checked before

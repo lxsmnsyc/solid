@@ -157,6 +157,9 @@ const hooks: EdgeHooks = {
       else memoReads.delete(owner);
     }
   },
+  reads(owner: object) {
+    return memoReads.get(owner);
+  },
   report(owner: object) {
     if (readSink === null) return;
     const reads = memoReads.get(owner);

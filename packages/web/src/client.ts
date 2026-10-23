@@ -33,7 +33,8 @@ import {
   SOURCE_PLAIN,
   SOURCE_OMIT,
   SOURCE_PROXY,
-  SOURCE_MEMO
+  SOURCE_MEMO,
+  setSignalIdentities
 } from "solid-js/internal";
 import { effect, memo, setSpreadName, spreadLoc, spreadName, tagElement } from "./render.js";
 
@@ -2404,6 +2405,8 @@ export function hydrate(code, element, options = {}) {
   } finally {
     const stats = ((globalThis as any).__graphExp ||= { hydrateMs: 0, traces: 0, traceMs: 0 });
     stats.hydrateMs += performance.now() - start;
+    // From the start of navigation, so the parse of the page and of its data counts too.
+    stats.doneAt = performance.now();
   }
 }
 
@@ -2465,6 +2468,9 @@ function hydrateTimed(code, element, options = {}) {
   sharedConfig.events = globalThis._$HY.events;
   sharedConfig.load = id => globalThis._$HY.r[id];
   sharedConfig.has = id => id in globalThis._$HY.r;
+  // EXPERIMENT(graph-hydration): a page with graph entries names its plain signals as the
+  // server did, so an adopted memo can find the sources that the server recorded.
+  if (Object.keys(globalThis._$HY.r).some(key => key.endsWith("#g"))) setSignalIdentities(true);
   sharedConfig.gather = root => gatherHydratable(element, root);
   sharedConfig.loadModuleAssets = loadModuleAssets;
   sharedConfig.cleanupFragment = id => {
